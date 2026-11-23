@@ -29,6 +29,7 @@ LABELS_ROOT = SOURCE_ROOT / "Labels"  # 进行归一化之后的标签位置
 DEST_ROOT = Path("/content/Dataset")
 DEST_IMAGES_PATH = DEST_ROOT / "Safety_Helmet_Train_dataset" / "score" / "images"  # 区分训练集、测试集、验证集的图片目标路径
 DEST_LABELS_PATH = DEST_ROOT / "Safety_Helmet_Train_dataset" / "score" / "labels"  # 区分训练集、测试集、验证集的标签文件目标路径
+IMAGE_SUFFIXES = {".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
 
 
 def cord_converter(size, box):
@@ -141,13 +142,29 @@ def copy_data(img_set_source, img_labels_root, imgs_source, dataset_type):
     os.makedirs(DEST_IMAGES_PATH / dataset_type, exist_ok=True)
     os.makedirs(DEST_LABELS_PATH / dataset_type, exist_ok=True)
 
+    image_index = {}
+    for image_file in imgs_source.iterdir():
+        if image_file.is_file() and image_file.suffix.lower() in IMAGE_SUFFIXES:
+            image_index.setdefault(image_file.stem, image_file)
+
     with open(file_name, encoding="UTF-8") as f:
-        for img_name in tqdm(f.read().splitlines()):
-            img_sor_file = imgs_source.joinpath(img_name).with_suffix('.jpg')
+        for item_name in tqdm(f.read().splitlines()):
+            img_name = Path(item_name).stem
+            img_sor_file = image_index.get(img_name)
+            if img_sor_file is None:
+                raise FileNotFoundError(
+                    f"{file_name} 中包含图片 {item_name!r}，但在 {imgs_source} "
+                    "中未找到同名图片。请检查数据压缩包或重新生成 train.txt/val.txt/test.txt。"
+                )
+
             label_sor_file = img_labels_root.joinpath(img_name).with_suffix('.txt')
+            if not label_sor_file.exists():
+                raise FileNotFoundError(
+                    f"未找到图片 {img_name!r} 对应的标签文件: {label_sor_file}"
+                )
 
             # 复制图片
-            dict_file = (DEST_IMAGES_PATH / dataset_type / img_name).with_suffix('.jpg')
+            dict_file = (DEST_IMAGES_PATH / dataset_type / img_name).with_suffix(img_sor_file.suffix)
             copyfile(img_sor_file, dict_file)
 
             # 复制 label
