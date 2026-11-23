@@ -16,17 +16,19 @@ from xml.dom.minidom import parse
 import numpy as np
 from tqdm import tqdm
 
-FILE_ROOT = Path(r"E:\AI_Project\AI_Learning\Dataset")
+# 原始数据集路径（Colab 解压 /content/VOC2028 后内层为 VOC2028 目录）
+SOURCE_ROOT = Path("/content/VOC2028/VOC2028")
 
 # 原始数据集
-IMAGE_SET_ROOT = FILE_ROOT.joinpath(r"VOC2028\ImageSets\Main")  # 图片区分文件的路径
-IMAGE_PATH = FILE_ROOT.joinpath(r"VOC2028\JPEGImages")  # 图片的位置
-ANNOTATIONS_PATH = FILE_ROOT.joinpath(r"VOC2028\Annotations")  # 数据集标签文件的位置
-LABELS_ROOT = FILE_ROOT.joinpath(r"VOC2028\Labels")  # 进行归一化之后的标签位置
+IMAGE_SET_ROOT = SOURCE_ROOT / "ImageSets" / "Main"  # 图片区分文件的路径
+IMAGE_PATH = SOURCE_ROOT / "JPEGImages"  # 图片的位置
+ANNOTATIONS_PATH = SOURCE_ROOT / "Annotations"  # 数据集标签文件的位置
+LABELS_ROOT = SOURCE_ROOT / "Labels"  # 进行归一化之后的标签位置
 
 # YOLO 需要的数据集形式的新数据集
-DEST_IMAGES_PATH = Path(r"Safety_Helmet_Train_dataset\score\images")  # 区分训练集、测试集、验证集的图片目标路径
-DEST_LABELS_PATH = Path(r"Safety_Helmet_Train_dataset\score\labels")  # 区分训练集、测试集、验证集的标签文件目标路径
+DEST_ROOT = Path("/content/Dataset")
+DEST_IMAGES_PATH = DEST_ROOT / "Safety_Helmet_Train_dataset" / "score" / "images"  # 区分训练集、测试集、验证集的图片目标路径
+DEST_LABELS_PATH = DEST_ROOT / "Safety_Helmet_Train_dataset" / "score" / "labels"  # 区分训练集、测试集、验证集的标签文件目标路径
 
 
 def cord_converter(size, box):
@@ -136,8 +138,8 @@ def copy_data(img_set_source, img_labels_root, imgs_source, dataset_type):
     file_name = img_set_source.joinpath(dataset_type).with_suffix(".txt")  # 获取对应数据集种类的图片
 
     # 判断目标图片文件夹和标签文件夹是否存在，不存在则创建
-    os.makedirs(FILE_ROOT.joinpath(DEST_IMAGES_PATH, dataset_type), exist_ok=True)
-    os.makedirs(FILE_ROOT.joinpath(DEST_LABELS_PATH, dataset_type), exist_ok=True)
+    os.makedirs(DEST_IMAGES_PATH / dataset_type, exist_ok=True)
+    os.makedirs(DEST_LABELS_PATH / dataset_type, exist_ok=True)
 
     with open(file_name, encoding="UTF-8") as f:
         for img_name in tqdm(f.read().splitlines()):
@@ -145,11 +147,11 @@ def copy_data(img_set_source, img_labels_root, imgs_source, dataset_type):
             label_sor_file = img_labels_root.joinpath(img_name).with_suffix('.txt')
 
             # 复制图片
-            dict_file = FILE_ROOT.joinpath(DEST_IMAGES_PATH, dataset_type, img_name).with_suffix('.jpg')
+            dict_file = (DEST_IMAGES_PATH / dataset_type / img_name).with_suffix('.jpg')
             copyfile(img_sor_file, dict_file)
 
             # 复制 label
-            dict_file = FILE_ROOT.joinpath(DEST_LABELS_PATH, dataset_type, img_name).with_suffix('.txt')
+            dict_file = (DEST_LABELS_PATH / dataset_type / img_name).with_suffix('.txt')
             copyfile(label_sor_file, dict_file)
 
 
