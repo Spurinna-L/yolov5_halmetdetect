@@ -9,7 +9,6 @@
   let selectedImageFile = null;
   let imageOriginObjectUrl = null;
   let selectedVideoObjectUrl = null;
-  let trainingLoaded = false;
 
   const streamState = {
     ws: null,
@@ -20,7 +19,6 @@
     processedFrames: 0,
     consecutiveAlarmFrames: 0,
     lastSnapshotAtMs: 0,
-    alarmTriggered: false,
     snapshots: [],
     offscreenCanvas: document.createElement("canvas"),
   };
@@ -33,6 +31,15 @@
     const mins = Math.floor(safeSec / 60);
     const secs = safeSec % 60;
     return `${String(mins).padStart(2, "0")}:${secs.toFixed(1).padStart(4, "0")}`;
+  }
+
+  function setStatusBar(leftText, perfText) {
+    if (leftText !== null && leftText !== undefined) {
+      $("statusBarLeft").textContent = leftText;
+    }
+    if (perfText !== null && perfText !== undefined) {
+      $("statusBarPerf").textContent = perfText;
+    }
   }
 
   function updateKpiPanel(prefix, data) {
@@ -52,9 +59,10 @@
     totalEl.textContent = String(data.total ?? 0);
     helmetEl.textContent = String(data.helmet_count ?? 0);
     headEl.textContent = String(data.head_count ?? 0);
-    rateEl.textContent = data.compliance_rate === null || data.compliance_rate === undefined
-      ? "N/A"
-      : `${data.compliance_rate}%`;
+    rateEl.textContent =
+      data.compliance_rate === null || data.compliance_rate === undefined
+        ? "N/A"
+        : `${data.compliance_rate}%`;
   }
 
   function setAlarmBanner(bannerEl, mode, title, desc) {
@@ -67,7 +75,7 @@
   function openLightbox(src, title) {
     if (!src) return;
     $("lightboxImg").src = src;
-    $("lightboxTitle").textContent = title || "图片预览";
+    $("lightboxTitle").textContent = title || "预览";
     $("lightboxModal").classList.remove("hidden");
   }
 
@@ -90,15 +98,18 @@
         pill.classList.add("status-ok");
         const provider = (data.providers && data.providers[0]) || "CPU";
         const shortProv = provider.replace("ExecutionProvider", "");
-        textEl.textContent = `后端在线 · ${data.model_name} (${shortProv})`;
+        textEl.textContent = `${data.model_name} (${shortProv})`;
+        setStatusBar("就绪 · ONNX 模型已加载", `${data.input_size}×${data.input_size}`);
       } else {
         pill.classList.add("status-err");
-        textEl.textContent = `模型未就绪: ${data.error || "检查 best.onnx"}`;
+        textEl.textContent = `未就绪: ${data.error || "检查 best.onnx"}`;
+        setStatusBar("模型未就绪", "--");
       }
     } catch (_err) {
       pill.classList.remove("status-loading", "status-ok");
       pill.classList.add("status-err");
-      textEl.textContent = "无法连接后端服务";
+      textEl.textContent = "后端离线";
+      setStatusBar("无法连接 WSL 后端服务", "--");
     }
   }
 
@@ -121,19 +132,20 @@
           panel.classList.toggle("active", panel.id === `tab-${target}`);
         });
 
-        // Cleanly pause/stop active streaming when leaving the video tab.
         if (target !== "video" && streamState.running) {
-          stopVideoStream();
+          stopVideoStream("已切换页面并停止流式检测");
         }
-        if (target === "training" && !trainingLoaded) {
-          loadTrainingReport();
+        if (target === "image") {
+          setStatusBar("图片检测模式", $("imgPerfBadge").textContent);
+        } else {
+          setStatusBar("流式视频检测模式", $("vidStreamBadge").textContent);
         }
       });
     });
   }
 
   // =========================================================================
-  // Tab 1: Image Detection
+  // DropZone Helper
   // =========================================================================
   function bindDropZone(zoneEl, inputEl, onFileSelected) {
     zoneEl.addEventListener("click", () => inputEl.click());
@@ -160,6 +172,9 @@
     });
   }
 
+  // =========================================================================
+  // Tab 1: Image Detection
+  // =========================================================================
   function handleImageSelected(file) {
     if (!file.type.startsWith("image/")) {
       alert("请选择有效的图片文件（JPG / PNG / BMP / WEBP）");
@@ -181,7 +196,8 @@
     $("imgDownloadBtn").classList.add("disabled");
     $("imgDownloadBtn").removeAttribute("href");
     $("imgDetectBtn").disabled = false;
-    $("imgPerfBadge").textContent = "图片已就绪，点击「开始检测」";
+    $("imgPerfBadge").textContent = "待推理";
+    setStatusBar(`已加载图片: ${file.name}`, "待推理");
   }
 
   function renderImageDetectionsList(detections) {
@@ -217,7 +233,8 @@
     const btn = $("imgDetectBtn");
     btn.disabled = true;
     btn.textContent = "推理中...";
-    $("imgPerfBadge").textContent = "正在通过 WSL ONNX Runtime 推理...";
+    $("imgPerfBadge").textContent = "推理中...";
+    setStatusBar("正在执行 ONNX 图像推理...", "处理中");
 
     const formData = new FormData();
     formData.append("file", selectedImageFile);
@@ -242,7 +259,9 @@
       dlBtn.download = data.filename || "helmet_detected.jpg";
       dlBtn.classList.remove("disabled");
 
-      $("imgPerfBadge").textContent = `${data.width}×${data.height} · ${data.infer_ms} ms (${data.fps} FPS)`;
+      const perfStr = `${data.width}×${data.height} | ${data.infer_ms} ms | ${data.fps} FPS`;
+      $("imgPerfBadge").textContent = perfStr;
+      setStatusBar("图片检测完成", perfStr);
       updateKpiPanel("img", data);
       renderImageDetectionsList(data.detections || []);
 
@@ -251,26 +270,27 @@
         setAlarmBanner(
           banner,
           "alarm-danger",
-          `发现未佩戴安全帽告警 (${data.head_count} 人)`,
-          `当前安全帽佩戴率 ${data.compliance_rate ?? 0}% ，请及时督促整改`
+          `未佩戴告警 (${data.head_count} 人)`,
+          `安全帽佩戴率 ${data.compliance_rate ?? 0}%`
         );
       } else if (data.total > 0) {
         setAlarmBanner(
           banner,
           "alarm-safe",
-          "安全合规 · 全员已佩戴安全帽",
-          `共检测到 ${data.helmet_count} 人全部规范佩戴安全帽`
+          "全员佩戴合规",
+          `已规范佩戴 ${data.helmet_count} 人`
         );
       } else {
         setAlarmBanner(
           banner,
           "alarm-idle",
-          "未检测到人员头部目标",
-          "可尝试适当调低左侧置信度阈值后重新检测"
+          "未检测到目标",
+          "可调低 Conf 阈值后重试"
         );
       }
     } catch (err) {
-      $("imgPerfBadge").textContent = `检测失败: ${err.message}`;
+      $("imgPerfBadge").textContent = "推理失败";
+      setStatusBar(`检测失败: ${err.message}`, "--");
       alert(`检测失败: ${err.message}`);
     } finally {
       btn.disabled = false;
@@ -319,7 +339,8 @@
     $("vidOriginEmpty").classList.add("hidden");
 
     $("vidStartBtn").disabled = false;
-    $("vidStreamBadge").textContent = "视频已加载，点击「开始流式检测」";
+    $("vidStreamBadge").textContent = "视频已加载";
+    setStatusBar(`已加载视频: ${file.name}`, "待推流");
   }
 
   function renderSnapshotsList() {
@@ -328,7 +349,7 @@
 
     if (!streamState.snapshots.length) {
       listEl.innerHTML =
-        '<div class="empty-list">暂无违规抓拍记录（点击抓拍卡片可跳转视频对应时间点复查）</div>';
+        '<div class="empty-list">暂无违规抓拍记录（点击抓拍卡片可跳转对应时间点复查）</div>';
       return;
     }
 
@@ -338,8 +359,8 @@
         <div class="snapshot-card" data-snap-index="${idx}" title="点击跳转至 ${snap.timeStr} 查看">
           <img class="snapshot-thumb" src="${snap.thumbnail}" alt="违规抓拍 ${snap.timeStr}" />
           <div class="snapshot-meta">
-            <div class="snapshot-time">⏱ ${snap.timeStr} · 未戴 ${snap.headCount} 人</div>
-            <div class="snapshot-detail">已佩戴 ${snap.helmetCount} 人 · 点击回看该帧</div>
+            <div class="snapshot-time">${snap.timeStr} · 未戴 ${snap.headCount}</div>
+            <div class="snapshot-detail">已佩戴 ${snap.helmetCount} · 点击复查</div>
           </div>
         </div>
       `
@@ -349,8 +370,7 @@
     listEl.querySelectorAll(".snapshot-card").forEach((card) => {
       card.addEventListener("click", () => {
         const snap = streamState.snapshots[Number(card.dataset.snapIndex)];
-        if (!snap) return;
-        reviewSnapshot(snap);
+        if (snap) reviewSnapshot(snap);
       });
     });
   }
@@ -361,7 +381,7 @@
       togglePauseVideoStream();
     }
     videoEl.currentTime = snap.timestampSec;
-    $("vidCurrentTime").textContent = snap.timeStr;
+    setStatusBar(`回看违规抓拍 (${snap.timeStr})`, `时间 ${snap.timeStr}`);
 
     const canvas = $("vidResultCanvas");
     const ctx = canvas.getContext("2d");
@@ -392,12 +412,11 @@
     streamState.processedFrames += 1;
     const roundTripMs = Math.max(1, performance.now() - streamState.sentAtMs);
     const liveFps = 1000 / roundTripMs;
+    const timeStr = formatTimecode(msg.timestamp);
+    const perfLine = `帧 #${streamState.processedFrames} | ${liveFps.toFixed(1)} FPS | ${Math.round(roundTripMs)} ms | ${timeStr}`;
 
-    $("vidProcessedFrames").textContent = String(streamState.processedFrames);
-    $("vidLiveFps").textContent = `${liveFps.toFixed(1)} FPS`;
-    $("vidLiveLatency").textContent = `${Math.round(roundTripMs)} ms`;
-    $("vidCurrentTime").textContent = formatTimecode(msg.timestamp);
-
+    $("vidStreamBadge").textContent = `${liveFps.toFixed(1)} FPS · ${Math.round(roundTripMs)} ms`;
+    setStatusBar("WS 实时推流推理中", perfLine);
     updateKpiPanel("vid", msg);
 
     const alarmThreshold = Number($("vidAlarmFramesSlider").value) || 3;
@@ -407,12 +426,11 @@
     if (msg.head_count > 0) {
       streamState.consecutiveAlarmFrames += 1;
       if (streamState.consecutiveAlarmFrames >= alarmThreshold) {
-        streamState.alarmTriggered = true;
         setAlarmBanner(
           banner,
           "alarm-danger",
-          `持续违规告警 · 检测到 ${msg.head_count} 人未戴安全帽`,
-          `已连续 ${streamState.consecutiveAlarmFrames} 帧触发告警，合规率 ${msg.compliance_rate ?? 0}%`
+          `违规告警 · 未戴 ${msg.head_count} 人`,
+          `连续 ${streamState.consecutiveAlarmFrames} 帧确认 · 佩戴率 ${msg.compliance_rate ?? 0}%`
         );
 
         const nowMs = Date.now();
@@ -420,7 +438,7 @@
           streamState.lastSnapshotAtMs = nowMs;
           streamState.snapshots.unshift({
             timestampSec: Number(msg.timestamp) || 0,
-            timeStr: formatTimecode(msg.timestamp),
+            timeStr,
             headCount: msg.head_count,
             helmetCount: msg.helmet_count,
             thumbnail: msg.annotated_image,
@@ -434,25 +452,24 @@
         setAlarmBanner(
           banner,
           "alarm-idle",
-          `疑似未佩戴 (${streamState.consecutiveAlarmFrames}/${alarmThreshold} 帧确认中)`,
-          "正在通过连续帧防误报窗口过滤瞬时抖动"
+          `防误报确认 (${streamState.consecutiveAlarmFrames}/${alarmThreshold})`,
+          "过滤瞬时帧抖动"
         );
       }
     } else {
       streamState.consecutiveAlarmFrames = 0;
-      streamState.alarmTriggered = false;
       if (msg.total > 0) {
         setAlarmBanner(
           banner,
           "alarm-safe",
-          "实时监测合规 · 全员佩戴安全帽",
-          `当前画面共 ${msg.helmet_count} 人均已佩戴安全帽`
+          "监测合规 · 全员佩戴",
+          `当前画面共 ${msg.helmet_count} 人已佩戴`
         );
       } else {
         setAlarmBanner(
           banner,
           "alarm-idle",
-          "实时监测中 · 当前帧暂无头部目标",
+          "监测中 · 暂无目标",
           "画面持续推理中"
         );
       }
@@ -471,7 +488,7 @@
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
     if (videoEl.ended) {
-      stopVideoStream("视频播放与流式检测已完成");
+      stopVideoStream("流式检测已完成");
       return;
     }
 
@@ -521,14 +538,16 @@
     $("vidPauseBtn").disabled = false;
     $("vidPauseBtn").textContent = "暂停";
     $("vidStopBtn").disabled = false;
-    $("vidStreamBadge").textContent = "正在建立 WebSocket 推流连接...";
+    $("vidStreamBadge").textContent = "连接 WS...";
+    setStatusBar("正在建立 WebSocket 推流连接...", "--");
 
     const wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(`${wsProtocol}//${location.host}/ws/stream`);
     streamState.ws = ws;
 
     ws.onopen = () => {
-      $("vidStreamBadge").textContent = "WS 实时推流推理中";
+      $("vidStreamBadge").textContent = "推流中";
+      setStatusBar("WS 实时推流推理中", "准备接收首帧...");
       videoEl.playbackRate = Number($("vidSpeedSelect").value) || 1.0;
       if (videoEl.ended) videoEl.currentTime = 0;
       videoEl.play().catch(() => {});
@@ -547,7 +566,7 @@
 
       streamState.inFlight = false;
       if (msg.type === "error") {
-        $("vidStreamBadge").textContent = `推理提示: ${msg.message}`;
+        $("vidStreamBadge").textContent = msg.message;
       } else if (msg.type === "result") {
         drawCanvasAndHandleResult(msg);
       }
@@ -555,7 +574,7 @@
     };
 
     ws.onerror = () => {
-      $("vidStreamBadge").textContent = "WebSocket 连接异常";
+      $("vidStreamBadge").textContent = "WS 异常";
       stopVideoStream("WebSocket 连接中断");
     };
 
@@ -573,11 +592,13 @@
     if (streamState.paused) {
       videoEl.pause();
       $("vidPauseBtn").textContent = "继续";
-      $("vidStreamBadge").textContent = "流式检测已暂停";
+      $("vidStreamBadge").textContent = "已暂停";
+      setStatusBar("流式检测已暂停", `帧 #${streamState.processedFrames}`);
     } else {
       videoEl.play().catch(() => {});
       $("vidPauseBtn").textContent = "暂停";
-      $("vidStreamBadge").textContent = "WS 实时推流推理中";
+      $("vidStreamBadge").textContent = "推流中";
+      setStatusBar("WS 实时推流推理中", `帧 #${streamState.processedFrames}`);
       scheduleNextFrame();
     }
   }
@@ -607,6 +628,7 @@
     $("vidStopBtn").disabled = true;
     if (statusLabel) {
       $("vidStreamBadge").textContent = statusLabel;
+      setStatusBar(statusLabel, `共处理 ${streamState.processedFrames} 帧`);
     } else if (videoEl.src) {
       $("vidStreamBadge").textContent = "已停止";
     }
@@ -638,81 +660,6 @@
       streamState.snapshots = [];
       renderSnapshotsList();
     });
-  }
-
-  // =========================================================================
-  // Tab 3: Training Report
-  // =========================================================================
-  async function loadTrainingReport() {
-    try {
-      const resp = await fetch("/api/training-report");
-      const data = await resp.json();
-      trainingLoaded = true;
-
-      const s = data.summary || {};
-      $("trMap50").textContent = `${((s.final_map50 || 0) * 100).toFixed(1)}%`;
-      $("trHelmetMap50").textContent = `${((s.helmet_map50 || 0) * 100).toFixed(1)}%`;
-      $("trHeadMap50").textContent = `${((s.head_map50 || 0) * 100).toFixed(1)}%`;
-      $("trPR").textContent = `${((s.final_precision || 0) * 100).toFixed(1)}% / ${((s.final_recall || 0) * 100).toFixed(1)}%`;
-      $("trMap5095").textContent = `${((s.final_map50_95 || 0) * 100).toFixed(1)}%`;
-
-      const cfg = data.config || {};
-      const badgeItems = [
-        cfg.weights ? `预训练权重: ${cfg.weights}` : null,
-        cfg.epochs ? `Epochs: ${cfg.epochs}` : null,
-        cfg.imgsz ? `输入尺寸: ${cfg.imgsz}×${cfg.imgsz}` : null,
-        cfg.optimizer ? `优化器: ${cfg.optimizer}` : null,
-        cfg.freeze ? `冻结主干: 前 ${cfg.freeze} 层` : null,
-      ].filter(Boolean);
-
-      $("trainConfigBadges").innerHTML = badgeItems
-        .map((txt) => `<span class="badge">${txt}</span>`)
-        .join("");
-
-      const charts = data.charts || [];
-      $("trainChartsGrid").innerHTML = charts.length
-        ? charts
-            .map(
-              (c) => `
-              <div class="chart-card" data-chart-url="${c.url}" data-chart-title="${c.title}">
-                <img src="${c.url}" alt="${c.title}" loading="lazy" />
-                <div class="chart-info">
-                  <h4>${c.title}</h4>
-                  <p>${c.description}</p>
-                </div>
-              </div>
-            `
-            )
-            .join("")
-        : '<div class="empty-list">未在 project/runs/ 目录找到训练图表</div>';
-
-      $("trainChartsGrid").querySelectorAll(".chart-card").forEach((card) => {
-        card.addEventListener("click", () => {
-          openLightbox(card.dataset.chartUrl, card.dataset.chartTitle);
-        });
-      });
-
-      const epochs = data.epochs || [];
-      $("trainEpochCount").textContent = `${epochs.length} Epochs`;
-      $("trainEpochsBody").innerHTML = epochs
-        .map(
-          (row) => `
-          <tr>
-            <td>${row.epoch}</td>
-            <td>${row.train_box_loss.toFixed(4)}</td>
-            <td>${row.train_obj_loss.toFixed(4)}</td>
-            <td>${row.val_box_loss.toFixed(4)}</td>
-            <td>${(row.precision * 100).toFixed(2)}%</td>
-            <td>${(row.recall * 100).toFixed(2)}%</td>
-            <td>${(row.map50 * 100).toFixed(2)}%</td>
-            <td>${(row.map50_95 * 100).toFixed(2)}%</td>
-          </tr>
-        `
-        )
-        .join("");
-    } catch (_err) {
-      $("trainChartsGrid").innerHTML = '<div class="empty-list">加载训练报告失败，请确认后端已启动</div>';
-    }
   }
 
   // =========================================================================

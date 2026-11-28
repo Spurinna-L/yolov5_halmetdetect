@@ -2,8 +2,8 @@
 
 ## 1. 目录说明
 - `backend/detector.py`：ONNX Runtime 推理引擎（Letterbox 前处理、NMS 后处理、OpenCV 绿/红框渲染、佩戴率与告警统计）
-- `backend/main.py`：FastAPI 服务（图片检测接口、WebSocket 实时流式视频推理、训练报告数据解析与静态页面托管）
-- `frontend/`：深色工业风 Web 中控台（图片双屏对比、流式视频实时推理与违规抓拍回看、模型训练评估报告）
+- `backend/main.py`：FastAPI 服务（图片检测接口、WebSocket 实时流式视频推理与静态页面托管）
+- `frontend/`：VS Code 暗色工作台风格 Web 界面（图片双屏对比、流式视频实时推理与违规抓拍回看）
 - `runs/weights/best.onnx`：由 Colab 训练的 YOLOv5s 导出得到的自包含 ONNX 模型
 
 ## 2. WSL 启动步骤
@@ -24,4 +24,3 @@ export HELMET_MODEL_PATH=/mnt/d/vs_learning_code/yolov5_halmetdetect/project/run
 
 1. **图片检测**：拖拽或点击上传图片，调节置信度 / IoU 滑块，查看原图与标注图对比、安全帽佩戴率及目标置信度明细。
 2. **流式视频检测**：选择本地 MP4/MOV/WEBM 视频后零等待播放，浏览器按“背压闭环”抽帧并通过 WebSocket 发送到 WSL 推理，右侧实时画框与更新 FPS；连续 N 帧未佩戴安全帽触发告警并生成可点击跳转复查的违规抓拍卡片。
-3. **模型训练报告**：自动读取 `runs/results.csv`、`runs/opt.yaml` 与评估图表，一站式展示训练曲线、混淆矩阵与验证效果。

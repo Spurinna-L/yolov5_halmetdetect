@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import base64
-import csv
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -23,7 +22,6 @@ from backend.detector import HelmetDetector
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
 OUTPUTS_DIR = PROJECT_ROOT / "outputs"
-RUNS_DIR = PROJECT_ROOT / "runs"
 
 OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -57,100 +55,6 @@ def _prune_outputs(max_files: int = 80) -> None:
             pass
 
 
-def _parse_opt_yaml(opt_path: Path) -> dict[str, str]:
-    """Parse flat key-value fields from YOLOv5 opt.yaml using stdlib only."""
-    config: dict[str, str] = {}
-    if not opt_path.exists():
-        return config
-
-    target_keys = {"weights", "epochs", "batch_size", "imgsz", "optimizer", "patience"}
-    lines = opt_path.read_text(encoding="utf-8", errors="ignore").splitlines()
-    for idx, line in enumerate(lines):
-        if line.startswith(" ") or ":" not in line:
-            continue
-        key, raw_val = line.split(":", 1)
-        key = key.strip()
-        val = raw_val.strip().strip("'\"")
-        if key in target_keys:
-            config[key] = val
-        elif key == "freeze" and idx + 1 < len(lines) and lines[idx + 1].lstrip().startswith("- "):
-            config["freeze"] = lines[idx + 1].lstrip()[2:].strip()
-    return config
-
-
-def _parse_training_report() -> dict[str, Any]:
-    """Read training metrics and chart paths from project/runs using stdlib only."""
-    csv_path = RUNS_DIR / "results.csv"
-    epochs: list[dict[str, float | int]] = []
-
-    if csv_path.exists():
-        with csv_path.open("r", encoding="utf-8", errors="ignore") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                cleaned = {k.strip(): v.strip() for k, v in row.items() if k is not None}
-                try:
-                    epochs.append(
-                        {
-                            "epoch": int(float(cleaned.get("epoch", 0))) + 1,
-                            "train_box_loss": round(float(cleaned.get("train/box_loss", 0.0)), 4),
-                            "train_obj_loss": round(float(cleaned.get("train/obj_loss", 0.0)), 4),
-                            "train_cls_loss": round(float(cleaned.get("train/cls_loss", 0.0)), 4),
-                            "precision": round(float(cleaned.get("metrics/precision", 0.0)), 4),
-                            "recall": round(float(cleaned.get("metrics/recall", 0.0)), 4),
-                            "map50": round(float(cleaned.get("metrics/mAP50", 0.0)), 4),
-                            "map50_95": round(float(cleaned.get("metrics/mAP50-95", 0.0)), 4),
-                            "val_box_loss": round(float(cleaned.get("val/box_loss", 0.0)), 4),
-                        }
-                    )
-                except ValueError:
-                    continue
-
-    final_metrics = epochs[-1] if epochs else {}
-    best_map50 = max((e["map50"] for e in epochs), default=0.0)
-    opt_config = _parse_opt_yaml(RUNS_DIR / "opt.yaml")
-
-    chart_specs = [
-        ("results.png", "训练与验证指标总览曲线", "展示 15 个 Epoch 的损失收敛与 P / R / mAP 变化趋势"),
-        ("PR_curve.png", "Precision-Recall 曲线", "各类别精确率-召回率权衡曲线（helmet mAP@0.5 = 0.944）"),
-        ("confusion_matrix.png", "类别混淆矩阵", "展示 head、helmet 与背景类别的分类混淆情况"),
-        ("F1_curve.png", "F1-Confidence 曲线", "用于辅助选择最佳部署置信度阈值"),
-        ("val_batch0_pred.jpg", "验证集预测示例（Batch 0）", "模型在真实工地验证集上的实际检测框输出"),
-        ("val_batch1_pred.jpg", "验证集预测示例（Batch 1）", "多目标密集与遮挡场景下的安全帽检测效果"),
-        ("P_curve.png", "Precision-Confidence 曲线", "精确率随置信度阈值变化趋势"),
-        ("R_curve.png", "Recall-Confidence 曲线", "召回率随置信度阈值变化趋势"),
-        ("labels.jpg", "数据集标注分布图", "训练集类别样本量与目标框宽高分布统计"),
-    ]
-
-    charts = []
-    for filename, title, desc in chart_specs:
-        if (RUNS_DIR / filename).exists():
-            charts.append(
-                {
-                    "filename": filename,
-                    "title": title,
-                    "description": desc,
-                    "url": f"/runs/{filename}",
-                }
-            )
-
-    return {
-        "available": RUNS_DIR.exists(),
-        "summary": {
-            "total_epochs": len(epochs) or int(opt_config.get("epochs", 15) or 15),
-            "final_map50": final_metrics.get("map50", 0.8887),
-            "best_map50": best_map50 or 0.8887,
-            "final_map50_95": final_metrics.get("map50_95", 0.5143),
-            "final_precision": final_metrics.get("precision", 0.8977),
-            "final_recall": final_metrics.get("recall", 0.8137),
-            "helmet_map50": 0.944,
-            "head_map50": 0.833,
-        },
-        "config": opt_config,
-        "epochs": epochs,
-        "charts": charts,
-    }
-
-
 class AppState:
     detector: HelmetDetector | None = None
     detector_error: str | None = None
@@ -174,7 +78,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(
-    title="智慧工地安全帽智能检测系统",
+    title="安全帽检测工作台",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -209,12 +113,6 @@ async def get_status() -> dict[str, Any]:
         "classes": state.detector.class_names,
         "error": None,
     }
-
-
-@app.get("/api/training-report")
-async def get_training_report() -> dict[str, Any]:
-    """Return parsed Colab training curves, metrics, and evaluation figures."""
-    return _parse_training_report()
 
 
 @app.post("/api/detect/image")
@@ -333,5 +231,3 @@ async def stream_detect(websocket: WebSocket) -> None:
 
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
 app.mount("/outputs", StaticFiles(directory=str(OUTPUTS_DIR)), name="outputs")
-if RUNS_DIR.exists():
-    app.mount("/runs", StaticFiles(directory=str(RUNS_DIR)), name="runs")
