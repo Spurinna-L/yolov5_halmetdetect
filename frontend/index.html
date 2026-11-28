@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>智慧工地安全帽智能检测系统 | YOLOv5 ONNX</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Top Header -->
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 15a8 8 0 0 1 16 0" />
+            <path d="M12 3v4" />
+            <path d="M2 15h20v2a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-2z" />
+          </svg>
+        </div>
+        <div>
+          <h1>智慧工地安全帽智能检测系统</h1>
+          <p class="brand-sub">YOLOv5s + ONNX Runtime · WSL 推理引擎与实时安全监控台</p>
+        </div>
+      </div>
+
+      <nav class="nav-tabs" role="tablist" aria-label="功能导航">
+        <button class="tab-btn active" data-tab="image" role="tab" aria-selected="true">图片检测</button>
+        <button class="tab-btn" data-tab="video" role="tab" aria-selected="false">流式视频检测</button>
+        <button class="tab-btn" data-tab="training" role="tab" aria-selected="false">模型训练报告</button>
+      </nav>
+
+      <div id="backendStatusPill" class="status-pill status-loading">
+        <span class="dot"></span>
+        <span id="backendStatusText">正在连接推理后端...</span>
+      </div>
+    </header>
+
+    <!-- Tab 1: Image Detection -->
+    <main id="tab-image" class="tab-panel active">
+      <div class="workspace-grid">
+        <!-- Left Control Panel -->
+        <aside class="panel control-panel">
+          <div class="panel-header">
+            <h2>参数与图片导入</h2>
+            <span class="badge">HTTP 推理</span>
+          </div>
+
+          <div id="imgDropZone" class="drop-zone" tabindex="0">
+            <input id="imgFileInput" type="file" accept="image/*" hidden />
+            <div class="drop-icon">📷</div>
+            <p class="drop-title">点击或拖拽图片到此处</p>
+            <p id="imgFileName" class="drop-sub">支持 JPG / PNG / BMP / WEBP</p>
+          </div>
+
+          <div class="control-group">
+            <div class="slider-row">
+              <label for="imgConfSlider">置信度阈值 (Conf)</label>
+              <span id="imgConfVal" class="mono-val">0.40</span>
+            </div>
+            <input id="imgConfSlider" type="range" min="0.10" max="0.90" step="0.01" value="0.40" />
+            <p class="hint">调高可减少误报，调低可召回远处小目标</p>
+          </div>
+
+          <div class="control-group">
+            <div class="slider-row">
+              <label for="imgIouSlider">NMS 重叠阈值 (IoU)</label>
+              <span id="imgIouVal" class="mono-val">0.45</span>
+            </div>
+            <input id="imgIouSlider" type="range" min="0.10" max="0.90" step="0.01" value="0.45" />
+            <p class="hint">控制同一目标重叠框的去重严格程度</p>
+          </div>
+
+          <label class="checkbox-row">
+            <input id="imgHudCheckbox" type="checkbox" checked />
+            <span>在结果图左上角叠加 HUD 状态栏</span>
+          </label>
+
+          <div class="btn-stack">
+            <button id="imgDetectBtn" class="btn btn-primary" disabled>开始检测</button>
+            <a id="imgDownloadBtn" class="btn btn-secondary disabled" download="helmet_detected.jpg">下载标注结果图</a>
+          </div>
+        </aside>
+
+        <!-- Center Dual-Screen Comparison -->
+        <section class="panel stage-panel">
+          <div class="panel-header">
+            <h2>双屏对比视图</h2>
+            <span id="imgPerfBadge" class="meta-strip">等待导入图片...</span>
+          </div>
+
+          <div class="dual-stage">
+            <div class="media-card">
+              <div class="media-title">原始输入图像</div>
+              <div class="media-box">
+                <img id="imgOriginPreview" class="preview-img hidden zoomable" alt="原始图像" />
+                <div id="imgOriginEmpty" class="empty-placeholder">请先在左侧选择一张工地现场图片</div>
+              </div>
+            </div>
+
+            <div class="media-card">
+              <div class="media-title">ONNX 检测标注结果</div>
+              <div class="media-box">
+                <img id="imgResultPreview" class="preview-img hidden zoomable" alt="检测结果" />
+                <div id="imgResultEmpty" class="empty-placeholder">点击「开始检测」后在此展示绿/红框标注结果</div>
+              </div>
+            </div>
+          </div>
+          <p class="stage-tip">提示：点击任意图片可放大查看全尺寸细节；绿框代表已佩戴安全帽（HELMET），红框代表未佩戴（NO-HELMET）。</p>
+        </section>
+
+        <!-- Right Monitoring & Details -->
+        <aside class="panel monitor-panel">
+          <div class="panel-header">
+            <h2>安全合规监控</h2>
+            <span class="badge">单模型头部判定</span>
+          </div>
+
+          <div id="imgAlarmBanner" class="alarm-banner alarm-idle">
+            <div class="alarm-title">等待检测</div>
+            <div class="alarm-desc">上传图片后自动评估佩戴安全帽合规状态</div>
+          </div>
+
+          <div class="kpi-grid">
+            <div class="kpi-card">
+              <div class="kpi-label">检测总人数</div>
+              <div id="imgKpiTotal" class="kpi-value">--</div>
+            </div>
+            <div class="kpi-card kpi-safe">
+              <div class="kpi-label">已佩戴安全帽</div>
+              <div id="imgKpiHelmet" class="kpi-value">--</div>
+            </div>
+            <div class="kpi-card kpi-danger">
+              <div class="kpi-label">未佩戴 (违规)</div>
+              <div id="imgKpiHead" class="kpi-value">--</div>
+            </div>
+            <div class="kpi-card kpi-accent">
+              <div class="kpi-label">安全帽佩戴率</div>
+              <div id="imgKpiRate" class="kpi-value">--</div>
+            </div>
+          </div>
+
+          <div class="sub-header">
+            <h3>目标检测明细</h3>
+            <span id="imgDetCount" class="mono-val">0 个目标</span>
+          </div>
+          <div id="imgDetList" class="det-list">
+            <div class="empty-list">暂无检测目标</div>
+          </div>
+        </aside>
+      </div>
+    </main>
+
+    <!-- Tab 2: Streaming Video Detection -->
+    <main id="tab-video" class="tab-panel">
+      <div class="workspace-grid">
+        <!-- Left Control Panel -->
+        <aside class="panel control-panel">
+          <div class="panel-header">
+            <h2>流式推帧控制台</h2>
+            <span class="badge badge-live">WebSocket 实时流</span>
+          </div>
+
+          <div id="vidDropZone" class="drop-zone" tabindex="0">
+            <input id="vidFileInput" type="file" accept="video/*" hidden />
+            <div class="drop-icon">🎬</div>
+            <p class="drop-title">点击或拖拽本地视频</p>
+            <p id="vidFileName" class="drop-sub">零上传等待 · 边播边推边画框 (MP4 / MOV / WEBM)</p>
+          </div>
+
+          <div class="control-group">
+            <div class="slider-row">
+              <label for="vidConfSlider">实时置信度 (Conf)</label>
+              <span id="vidConfVal" class="mono-val">0.40</span>
+            </div>
+            <input id="vidConfSlider" type="range" min="0.10" max="0.90" step="0.01" value="0.40" />
+            <p class="hint">播放过程中拖动，下一帧立刻按新阈值生效</p>
+          </div>
+
+          <div class="control-group">
+            <div class="slider-row">
+              <label for="vidIouSlider">实时 IoU 阈值</label>
+              <span id="vidIouVal" class="mono-val">0.45</span>
+            </div>
+            <input id="vidIouSlider" type="range" min="0.10" max="0.90" step="0.01" value="0.45" />
+          </div>
+
+          <div class="control-group">
+            <div class="slider-row">
+              <label for="vidAlarmFramesSlider">防误报连续帧数</label>
+              <span id="vidAlarmFramesVal" class="mono-val">3 帧</span>
+            </div>
+            <input id="vidAlarmFramesSlider" type="range" min="1" max="10" step="1" value="3" />
+            <p class="hint">连续 N 帧检测到未戴安全帽才触发正式告警并抓拍</p>
+          </div>
+
+          <div class="control-group">
+            <div class="slider-row">
+              <label for="vidCooldownSlider">抓拍冷却间隔</label>
+              <span id="vidCooldownVal" class="mono-val">3 秒</span>
+            </div>
+            <input id="vidCooldownSlider" type="range" min="1" max="10" step="1" value="3" />
+          </div>
+
+          <div class="control-group inline-select">
+            <label for="vidSpeedSelect">播放倍速</label>
+            <select id="vidSpeedSelect">
+              <option value="0.5">0.5x（细看检测框）</option>
+              <option value="0.75">0.75x</option>
+              <option value="1" selected>1.0x（正常）</option>
+            </select>
+          </div>
+
+          <label class="checkbox-row">
+            <input id="vidHudCheckbox" type="checkbox" checked />
+            <span>输出帧叠加 HUD 状态栏</span>
+          </label>
+
+          <div class="btn-stack">
+            <button id="vidStartBtn" class="btn btn-primary" disabled>开始流式检测</button>
+            <div class="btn-row-2">
+              <button id="vidPauseBtn" class="btn btn-secondary" disabled>暂停</button>
+              <button id="vidStopBtn" class="btn btn-danger" disabled>停止</button>
+            </div>
+          </div>
+        </aside>
+
+        <!-- Center Live Dual View -->
+        <section class="panel stage-panel">
+          <div class="panel-header">
+            <h2>实时双屏流式推理</h2>
+            <span id="vidStreamBadge" class="meta-strip">WS 未连接</span>
+          </div>
+
+          <div class="dual-stage">
+            <div class="media-card">
+              <div class="media-title">原视频流 (浏览器解码)</div>
+              <div class="media-box">
+                <video id="vidOriginPlayer" class="preview-video hidden" controls muted playsinline></video>
+                <div id="vidOriginEmpty" class="empty-placeholder">请先在左侧选择一个工地测试视频</div>
+              </div>
+            </div>
+
+            <div class="media-card">
+              <div class="media-title">实时检测输出流 (WSL ONNX 返回)</div>
+              <div class="media-box">
+                <canvas id="vidResultCanvas" class="preview-canvas hidden"></canvas>
+                <div id="vidResultEmpty" class="empty-placeholder">点击「开始流式检测」实时渲染带框检测画面</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="stream-metrics-bar">
+            <div class="metric-chip"><span>处理帧数</span><strong id="vidProcessedFrames">0</strong></div>
+            <div class="metric-chip"><span>实时推理速度</span><strong id="vidLiveFps">-- FPS</strong></div>
+            <div class="metric-chip"><span>端到端延迟</span><strong id="vidLiveLatency">-- ms</strong></div>
+            <div class="metric-chip"><span>当前视频时间</span><strong id="vidCurrentTime">00:00.0</strong></div>
+          </div>
+        </section>
+
+        <!-- Right Alarm & Violation Snapshots -->
+        <aside class="panel monitor-panel">
+          <div class="panel-header">
+            <h2>实时安全告警与抓拍</h2>
+            <button id="vidClearSnapshotsBtn" class="btn-link" type="button">清空抓拍</button>
+          </div>
+
+          <div id="vidAlarmBanner" class="alarm-banner alarm-idle">
+            <div class="alarm-title">监控待机中</div>
+            <div class="alarm-desc">采用背压闭环推帧，保证画面零积压同步</div>
+          </div>
+
+          <div class="kpi-grid">
+            <div class="kpi-card">
+              <div class="kpi-label">当前总人数</div>
+              <div id="vidKpiTotal" class="kpi-value">--</div>
+            </div>
+            <div class="kpi-card kpi-safe">
+              <div class="kpi-label">已佩戴安全帽</div>
+              <div id="vidKpiHelmet" class="kpi-value">--</div>
+            </div>
+            <div class="kpi-card kpi-danger">
+              <div class="kpi-label">未佩戴 (违规)</div>
+              <div id="vidKpiHead" class="kpi-value">--</div>
+            </div>
+            <div class="kpi-card kpi-accent">
+              <div class="kpi-label">实时佩戴率</div>
+              <div id="vidKpiRate" class="kpi-value">--</div>
+            </div>
+          </div>
+
+          <div class="sub-header">
+            <h3>违规抓拍时间轴</h3>
+            <span id="vidSnapshotCount" class="mono-val">0 次告警</span>
+          </div>
+          <div id="vidSnapshotList" class="snapshot-list">
+            <div class="empty-list">暂无违规抓拍记录（点击抓拍卡片可跳转视频对应时间点复查）</div>
+          </div>
+        </aside>
+      </div>
+    </main>
+
+    <!-- Tab 3: Training Report -->
+    <main id="tab-training" class="tab-panel">
+      <div class="training-container">
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>Colab 模型训练成果与评估指标</h2>
+              <p class="panel-desc">数据集：SHWD / VOC2028（5457 训练 / 607 验证 / 1517 测试）· 基础模型：YOLOv5s · 输入尺寸：640×640</p>
+            </div>
+            <div id="trainConfigBadges" class="config-badges"></div>
+          </div>
+
+          <div class="train-kpi-row">
+            <div class="kpi-card kpi-accent">
+              <div class="kpi-label">验证集整体 mAP@0.5</div>
+              <div id="trMap50" class="kpi-value">--</div>
+            </div>
+            <div class="kpi-card kpi-safe">
+              <div class="kpi-label">Helmet (戴安全帽) mAP@0.5</div>
+              <div id="trHelmetMap50" class="kpi-value">--</div>
+            </div>
+            <div class="kpi-card kpi-warn">
+              <div class="kpi-label">Head (未戴安全帽) mAP@0.5</div>
+              <div id="trHeadMap50" class="kpi-value">--</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Precision / Recall</div>
+              <div id="trPR" class="kpi-value">--</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">mAP@0.5:0.95</div>
+              <div id="trMap5095" class="kpi-value">--</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>训练评估图表画廊</h2>
+            <span class="badge">点击任意图表放大查看</span>
+          </div>
+          <div id="trainChartsGrid" class="charts-grid"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>各 Epoch 收敛指标明细（results.csv）</h2>
+            <span id="trainEpochCount" class="mono-val">15 Epochs</span>
+          </div>
+          <div class="table-wrap">
+            <table class="metrics-table">
+              <thead>
+                <tr>
+                  <th>Epoch</th>
+                  <th>Train Box Loss</th>
+                  <th>Train Obj Loss</th>
+                  <th>Val Box Loss</th>
+                  <th>Precision</th>
+                  <th>Recall</th>
+                  <th>mAP@0.5</th>
+                  <th>mAP@0.5:0.95</th>
+                </tr>
+              </thead>
+              <tbody id="trainEpochsBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <!-- Shared Lightbox Modal -->
+  <div id="lightboxModal" class="lightbox hidden" role="dialog" aria-modal="true">
+    <div class="lightbox-backdrop"></div>
+    <div class="lightbox-content">
+      <div class="lightbox-bar">
+        <span id="lightboxTitle">图片预览</span>
+        <button id="lightboxCloseBtn" class="btn btn-secondary" type="button">关闭 (ESC)</button>
+      </div>
+      <img id="lightboxImg" src="" alt="放大预览" />
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

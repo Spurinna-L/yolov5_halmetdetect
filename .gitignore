@@ -1,1 +1,5 @@
 基于YOLOv5的安全帽检测.ipynb
+.venv/
+__pycache__/
+*.pyc
+outputs/
